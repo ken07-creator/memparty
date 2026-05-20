@@ -98,6 +98,15 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("set_typing", (payload = {}, ack = () => {}) => {
+    try {
+      engine.updateTyping(socket, payload.typing);
+      ack({ ok: true });
+    } catch (error) {
+      ack({ ok: false, message: error.message || "Could not update typing state." });
+    }
+  });
+
   socket.on("next_round", (_payload = {}, ack = () => {}) => {
     try {
       engine.advanceRound(socket);

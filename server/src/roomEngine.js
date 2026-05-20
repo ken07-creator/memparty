@@ -47,6 +47,29 @@ function trimRoomCode(code) {
   return (code || "").toUpperCase().trim();
 }
 
+function playerStatus(room, player) {
+  const submitted = room.submissions.some((sub) => sub.playerUserId === player.userId);
+  const voted = Boolean(room.votesByPlayer[player.userId]);
+  const typing = player.typingUntil > now();
+
+  if (!player.connected) {
+    return "reconnecting";
+  }
+  if (room.phase === "submission" && submitted) {
+    return "submitted";
+  }
+  if (room.phase === "voting" && voted) {
+    return "voted";
+  }
+  if (typing) {
+    return "typing";
+  }
+  if (room.phase === "lobby" && player.ready) {
+    return "ready";
+  }
+  return "online";
+}
+
 export class RoomEngine {
   constructor(io) {
     this.io = io;
@@ -167,6 +190,7 @@ export class RoomEngine {
     }
 
     player.ready = Boolean(ready);
+    player.lastActionAt = now();
     room.lastActiveAt = now();
     this.emitRoomState(room);
   }
@@ -263,6 +287,8 @@ export class RoomEngine {
       text,
       votes: 0
     });
+    player.typingUntil = 0;
+    player.lastActionAt = now();
 
     room.lastActiveAt = now();
 
@@ -292,6 +318,7 @@ export class RoomEngine {
     }
 
     room.votesByPlayer[player.userId] = submissionId;
+    player.lastActionAt = now();
     room.lastActiveAt = now();
 
     const voters = room.players.filter((entry) => entry.connected);
@@ -308,6 +335,7 @@ export class RoomEngine {
   sendReaction(socket, emoji) {
     const { room, player } = this.requirePlayer(socket.id);
     const reaction = REACTION_SET.includes(emoji) ? emoji : randomFrom(REACTION_SET);
+    player.lastActionAt = now();
     room.lastActiveAt = now();
 
     this.io.to(room.code).emit("reaction_burst", {
@@ -317,6 +345,16 @@ export class RoomEngine {
       userId: player.userId,
       at: now()
     });
+  }
+
+  updateTyping(socket, typing) {
+    const { room, player } = this.requirePlayer(socket.id);
+    if (room.phase !== "submission" || room.settings.mode !== "custom") {
+      return;
+    }
+    player.typingUntil = typing ? now() + 2200 : 0;
+    player.lastActionAt = now();
+    this.emitRoomState(room);
   }
 
   advanceRound(socket) {
@@ -396,6 +434,8 @@ export class RoomEngine {
       existing.username = safeName(profile.username || existing.username);
       existing.avatar = profile.avatar || existing.avatar;
       existing.lastSeenAt = now();
+      existing.typingUntil = 0;
+      existing.lastActionAt = now();
       return existing;
     }
 
@@ -414,7 +454,9 @@ export class RoomEngine {
       ready: false,
       connected: true,
       hand: [],
-      lastSeenAt: now()
+      lastSeenAt: now(),
+      typingUntil: 0,
+      lastActionAt: now()
     };
 
     room.players.push(player);
@@ -588,7 +630,9 @@ export class RoomEngine {
         score: entry.score,
         connected: entry.connected,
         submitted: room.submissions.some((sub) => sub.playerUserId === entry.userId),
-        isHost: entry.userId === room.hostUserId
+        isHost: entry.userId === room.hostUserId,
+        isTyping: entry.typingUntil > now(),
+        status: playerStatus(room, entry)
       })),
       myHand: viewer ? viewer.hand : [],
       submissions:
